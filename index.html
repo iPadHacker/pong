@@ -1,0 +1,355 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Pong Game</title>
+    <style>
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background: #111;
+            margin: 0;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        canvas {
+            background: #000;
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            box-shadow: 0 0 24px #000a;
+            border-radius: 0;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="pong"></canvas>
+    <script>
+        const canvas = document.getElementById('pong');
+        const ctx = canvas.getContext('2d');
+
+        // Sound effects
+        const paddleSound = new Audio('blip.wav');
+        const wallSound = new Audio('impact.wav');
+        const winSound = new Audio('win.wav');
+        let scoreDelay = 0; // ms remaining before play resumes after a score
+
+        // Responsive canvas
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        resizeCanvas();
+        window.addEventListener('resize', () => {
+            resizeCanvas();
+            initCircles();
+        });
+
+        // Game state
+        const GameState = { Menu: 0, Playing: 1 };
+        let gameState = GameState.Menu;
+
+        // Ball (slower speed)
+        let ball = { x: 200, y: 100, w: 20, h: 20, dx: 4, dy: 4 };
+
+        // Paddles
+        let paddle1 = { x: 30, y: 80, w: 10, h: 60 };
+        let paddle2 = { x: 360, y: 80, w: 10, h: 60 };
+        const paddleSpeed = 8;
+        let aiSpeed = 4;
+
+        // Scoring
+        let score1 = 0, score2 = 0;
+
+        // Controls
+        let wDown = false, sDown = false, upDown = false, downDown = false;
+        let singlePlayer = false;
+        let mouseY = 0;
+
+        // Animated background
+        const NumCircles = 10;
+        let circles = [];
+        function initCircles() {
+            circles = [];
+            for (let i = 0; i < NumCircles; i++) {
+                circles.push({
+                    x: Math.random() * canvas.width,
+                    y: Math.random() * canvas.height,
+                    dx: (Math.random() * 2 + 0.5) * (Math.random() < 0.5 ? 1 : -1),
+                    dy: (Math.random() * 2 + 0.5) * (Math.random() < 0.5 ? 1 : -1),
+                    color: `rgba(${Math.floor(Math.random() * 256)},${Math.floor(Math.random() * 256)},${Math.floor(Math.random() * 256)},0.24)`
+                });
+            }
+        }
+        initCircles();
+
+        // Menu option rectangles for hit-testing
+        let singlePlayerRect = { x: 0, y: 0, w: 0, h: 0 }, twoPlayerRect = { x: 0, y: 0, w: 0, h: 0 };
+
+        function resetBall() {
+            ball.x = canvas.width / 2 - ball.w / 2;
+            ball.y = canvas.height / 2 - ball.h / 2;
+            // Keep direction, but reverse
+            ball.dx = -ball.dx;
+            // Clamp speed if window is resized very small
+            if (Math.abs(ball.dx) > canvas.width / 10) ball.dx = Math.sign(ball.dx) * Math.max(2, canvas.width / 40);
+            if (Math.abs(ball.dy) > canvas.height / 10) ball.dy = Math.sign(ball.dy) * Math.max(2, canvas.height / 40);
+        }
+
+        function resetPaddles() {
+            paddle1.x = 30;
+            paddle1.y = canvas.height / 2 - paddle1.h / 2;
+            paddle2.x = canvas.width - 40;
+            paddle2.y = canvas.height / 2 - paddle2.h / 2;
+        }
+
+        function movePaddles() {
+            if (singlePlayer) {
+                // Mouse controls left paddle
+                let targetY = mouseY - paddle1.h / 2;
+                if (targetY < 0) targetY = 0;
+                if (targetY > canvas.height - paddle1.h) targetY = canvas.height - paddle1.h;
+                paddle1.y = targetY;
+
+                // AI for paddle2: sometimes "messes up"
+                if (Math.random() > 0.25) {
+                    if (ball.y + ball.h / 2 < paddle2.y + paddle2.h / 2 && paddle2.y > 0)
+                        paddle2.y -= aiSpeed;
+                    else if (ball.y + ball.h / 2 > paddle2.y + paddle2.h / 2 && paddle2.y < canvas.height - paddle2.h)
+                        paddle2.y += aiSpeed;
+                }
+            } else {
+                // Two player mode: WASD and Arrow keys
+                if (wDown && paddle1.y > 0) paddle1.y -= paddleSpeed;
+                if (sDown && paddle1.y < canvas.height - paddle1.h) paddle1.y += paddleSpeed;
+                if (upDown && paddle2.y > 0) paddle2.y -= paddleSpeed;
+                if (downDown && paddle2.y < canvas.height - paddle2.h) paddle2.y += paddleSpeed;
+            }
+        }
+
+        function moveBall() {
+            if (scoreDelay > 0) return; // Pause ball movement during score delay
+
+            ball.x += ball.dx;
+            ball.y += ball.dy;
+
+            // Wall collision
+            if (ball.y <= 0) {
+                ball.y = 0;
+                ball.dy = -ball.dy;
+                wallSound.currentTime = 0;
+                wallSound.play();
+            }
+            if (ball.y + ball.h >= canvas.height) {
+                ball.y = canvas.height - ball.h;
+                ball.dy = -ball.dy;
+                wallSound.currentTime = 0;
+                wallSound.play();
+            }
+
+            // Paddle collision
+            if (intersects(ball, paddle1) || intersects(ball, paddle2)) {
+                ball.dx = -ball.dx;
+                paddleSound.currentTime = 0;
+                paddleSound.play();
+            }
+
+            // Scoring
+            if (ball.x < 0) {
+                score2++;
+                winSound.currentTime = 0;
+                winSound.play();
+                resetBall();
+                resetPaddles();
+                scoreDelay = 747; // 747 ms delay
+            } else if (ball.x > canvas.width - ball.w) {
+                score1++;
+                winSound.currentTime = 0;
+                winSound.play();
+                resetBall();
+                resetPaddles();
+                scoreDelay = 747; // 747 ms delay
+            }
+        }
+
+        function intersects(a, b) {
+            return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+        }
+
+        function animateBackground() {
+            for (let c of circles) {
+                c.x += c.dx;
+                c.y += c.dy;
+                if (c.x < -40 || c.x > canvas.width + 40) c.dx = -c.dx;
+                if (c.y < -40 || c.y > canvas.height + 40) c.dy = -c.dy;
+            }
+        }
+
+        function drawOutlinedText(text, x, y, font, fill, outline, thickness, center) {
+            ctx.save();
+            ctx.font = font;
+            ctx.lineWidth = thickness;
+            ctx.strokeStyle = outline;
+            ctx.fillStyle = fill;
+            ctx.textAlign = center ? "center" : "left";
+            ctx.textBaseline = "top";
+            ctx.strokeText(text, x, y);
+            ctx.fillText(text, x, y);
+            ctx.restore();
+        }
+
+        function draw() {
+            // Animated background
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            for (let c of circles) {
+                ctx.beginPath();
+                ctx.arc(c.x, c.y, 30, 0, 2 * Math.PI);
+                ctx.fillStyle = c.color;
+                ctx.fill();
+            }
+
+            if (gameState === GameState.Menu) {
+                drawOutlinedText("PONG", canvas.width / 2, canvas.height / 8, "bold 28px Arial", "#fff", "#000", 2, true);
+
+                // Menu options
+                ctx.font = "bold 16px Arial";
+                let singleText = "Single Player";
+                let twoText = "Two Players";
+                let singleSize = ctx.measureText(singleText);
+                let twoSize = ctx.measureText(twoText);
+
+                let singleX = (canvas.width - singleSize.width) / 2;
+                let singleY = canvas.height / 2 - 30;
+                let twoX = (canvas.width - twoSize.width) / 2;
+                let twoY = canvas.height / 2 + 10;
+
+                singlePlayerRect = { x: singleX - 10, y: singleY - 5, w: singleSize.width + 20, h: 28 };
+                twoPlayerRect = { x: twoX - 10, y: twoY - 5, w: twoSize.width + 20, h: 28 };
+
+                // Highlight on hover
+                let mouse = canvas._mouse || { x: -1, y: -1 };
+                if (pointInRect(mouse, singlePlayerRect))
+                    ctx.fillStyle = "rgba(255,255,255,0.24)", ctx.fillRect(singlePlayerRect.x, singlePlayerRect.y, singlePlayerRect.w, singlePlayerRect.h);
+                if (pointInRect(mouse, twoPlayerRect))
+                    ctx.fillStyle = "rgba(255,255,255,0.24)", ctx.fillRect(twoPlayerRect.x, twoPlayerRect.y, twoPlayerRect.w, twoPlayerRect.h);
+
+                drawOutlinedText(singleText, canvas.width / 2, singleY, "bold 16px Arial", "#fff", "#000", 2, true);
+                drawOutlinedText(twoText, canvas.width / 2, twoY, "bold 16px Arial", "#fff", "#000", 2, true);
+                return;
+            }
+
+            // Playfield border
+            ctx.save();
+            ctx.strokeStyle = "#fff";
+            ctx.lineWidth = 3;
+            ctx.strokeRect(5, 5, canvas.width - 10, canvas.height - 10);
+            ctx.restore();
+
+            // Dashed center line
+            ctx.save();
+            ctx.strokeStyle = "#fff";
+            ctx.lineWidth = 2;
+            ctx.setLineDash([6, 6]);
+            ctx.beginPath();
+            ctx.moveTo(canvas.width / 2, 10);
+            ctx.lineTo(canvas.width / 2, canvas.height - 10);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.restore();
+
+            // Paddles and ball
+            ctx.fillStyle = "#fff";
+            ctx.fillRect(paddle1.x, paddle1.y, paddle1.w, paddle1.h);
+            ctx.fillRect(paddle2.x, paddle2.y, paddle2.w, paddle2.h);
+            ctx.beginPath();
+            ctx.arc(ball.x + ball.w / 2, ball.y + ball.h / 2, ball.w / 2, 0, 2 * Math.PI);
+            ctx.fill();
+
+            // Scores
+            drawOutlinedText(score1.toString(), canvas.width / 2 - 80, 20, "bold 28px Consolas", "#fff", "#000", 2, false);
+            drawOutlinedText(score2.toString(), canvas.width / 2 + 40, 20, "bold 28px Consolas", "#fff", "#000", 2, false);
+        }
+
+        function pointInRect(p, r) {
+            return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+        }
+
+        // Input
+        document.addEventListener('keydown', e => {
+            if (gameState === GameState.Menu) return;
+            if (!singlePlayer) {
+                if (e.key === 'w' || e.key === 'W') wDown = true;
+                if (e.key === 's' || e.key === 'S') sDown = true;
+                if (e.key === 'ArrowUp') upDown = true;
+                if (e.key === 'ArrowDown') downDown = true;
+            }
+        });
+        document.addEventListener('keyup', e => {
+            if (gameState !== GameState.Playing) return;
+            if (!singlePlayer) {
+                if (e.key === 'w' || e.key === 'W') wDown = false;
+                if (e.key === 's' || e.key === 'S') sDown = false;
+                if (e.key === 'ArrowUp') upDown = false;
+                if (e.key === 'ArrowDown') downDown = false;
+            }
+        });
+        canvas.addEventListener('mousemove', e => {
+            let rect = canvas.getBoundingClientRect();
+            mouseY = e.clientY - rect.top;
+            // For menu hover
+            canvas._mouse = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        });
+        canvas.addEventListener('mouseleave', e => {
+            canvas._mouse = { x: -1, y: -1 };
+        });
+        canvas.addEventListener('click', e => {
+            if (gameState === GameState.Menu) {
+                let rect = canvas.getBoundingClientRect();
+                let mouse = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+                if (pointInRect(mouse, singlePlayerRect)) {
+                    singlePlayer = true;
+                    gameState = GameState.Playing;
+                    score1 = 0; score2 = 0;
+                    resetBall();
+                    resetPaddles();
+                } else if (pointInRect(mouse, twoPlayerRect)) {
+                    singlePlayer = false;
+                    gameState = GameState.Playing;
+                    score1 = 0; score2 = 0;
+                    resetBall();
+                    resetPaddles();
+                }
+            }
+        });
+
+        // Main loop with score delay
+        let lastTimestamp = performance.now();
+        function loop(now) {
+            animateBackground();
+            if (gameState === GameState.Playing) {
+                let elapsed = now - lastTimestamp;
+                lastTimestamp = now;
+                if (scoreDelay > 0) {
+                    scoreDelay -= elapsed;
+                    if (scoreDelay < 0) scoreDelay = 0;
+                } else {
+                    movePaddles();
+                    moveBall();
+                }
+            }
+            draw();
+            requestAnimationFrame(loop);
+        }
+        requestAnimationFrame(loop);
+    </script>
+</body>
+</html>
